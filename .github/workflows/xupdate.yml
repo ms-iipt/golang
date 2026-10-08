@@ -34,6 +34,7 @@ jobs:
         run: WORK_DIR="$RUNNER_TEMP/work" scripts/build-xupdate.sh "$VERSION"
 
       - name: Test
+        shell: bash # -eo pipefail
         run: |
           # 결과물을 풀어 그 go 로 테스트한다.
           tar -C "$RUNNER_TEMP" -xzf "dist/$FILE"
@@ -44,7 +45,17 @@ jobs:
           echo "$got"
           test "$got" = "go version go$VERSION linux/amd64"
 
-          go test -short std cmd/...
+          # 실패한 패키지는 한 번 더 돌려 다시 실패할 때만 멈춘다. 공식 빌드에서도 가끔 실패하는
+          # 테스트가 있다 (예: cmd/cgo/internal/testsanitizers 의 ASan 런타임 오류, golang/go#78770).
+          log="$RUNNER_TEMP/test.log"
+          if ! go test -short std cmd/... 2>&1 | tee "$log"; then
+            mapfile -t failed < <(awk '$1 == "FAIL" && NF > 1 { print $2 }' "$log" | sort -u)
+            if [[ ${#failed[@]} -eq 0 ]]; then
+              exit 1
+            fi
+            echo "::warning::retrying failed packages: ${failed[*]}"
+            go test -short -count=1 "${failed[@]}"
+          fi
 
       - name: Publish
         env:
