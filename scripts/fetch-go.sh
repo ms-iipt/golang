@@ -4,7 +4,7 @@
 #   scripts/fetch-go.sh <version> [platform]
 #
 #   version   예: 1.26.8 (go1.26.8 도 허용)
-#   platform  <GOOS>-<GOARCH>, 기본값 linux-amd64
+#   platform  <GOOS>-<GOARCH> 또는 src(소스), 기본값 linux-amd64
 #
 # 결과물 ($OUT_DIR, 기본값 dist):
 #   go<version>.<platform>.tar.gz          공식 파일 그대로
@@ -17,7 +17,7 @@ platform="${2:-linux-amd64}"
 out_dir="${OUT_DIR:-dist}"
 
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?((rc|beta)[0-9]+)?$ ]] ||
-  [[ ! "$platform" =~ ^[a-z0-9]+-[a-z0-9]+$ ]]; then
+  [[ ! "$platform" =~ ^([a-z0-9]+-[a-z0-9]+|src)$ ]]; then
   echo "error: invalid version or platform: $version $platform" >&2
   exit 1
 fi

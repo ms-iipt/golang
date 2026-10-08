@@ -72,6 +72,7 @@ jobs:
           SHA256="$(cut -d' ' -f1 "dist/$FILE.sha256")"
           DOWNLOAD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$FILE"
           export VERSION FILE SHA256 DOWNLOAD_URL
+          # shellcheck disable=SC2016 # envsubst 에 치환할 변수 이름을 그대로 넘긴다
           envsubst '${VERSION} ${FILE} ${SHA256} ${DOWNLOAD_URL}' \
             < .github/release-notes.md > "$RUNNER_TEMP/notes.md"
 

@@ -1,0 +1,86 @@
+name: xupdate
+
+# 공식 Go 소스에서 std/cmd 가 포함한 golang.org/x/net, x/text, x/sys 를 최신으로 올린
+# linux/amd64 배포본을 빌드·테스트해 기존 Release(go<버전>)와 저장소의 archives/ 에 추가한다.
+# 다시 실행하면 같은 이름의 파일과 릴리스 노트의 해당 섹션을 교체한다.
+#   - Actions 탭 > xupdate > Run workflow (버전 입력)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Go 버전 (예 1.26.8, release 워크플로로 만든 Release가 있어야 함)
+        required: true
+        default: 1.26.8
+
+permissions:
+  contents: write
+
+jobs:
+  xupdate:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      FILE: go${{ inputs.version }}.linux-amd64.xupdate.tar.gz
+    steps:
+      - uses: actions/checkout@v7
+
+      # 부트스트랩용 Go
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.version }}
+          cache: false
+
+      - name: Build
+        run: WORK_DIR="$RUNNER_TEMP/work" scripts/build-xupdate.sh "$VERSION"
+
+      - name: Test
+        run: |
+          # 결과물을 풀어 그 go 로 테스트한다.
+          tar -C "$RUNNER_TEMP" -xzf "dist/$FILE"
+          export PATH="$RUNNER_TEMP/go/bin:$PATH" GOTOOLCHAIN=local
+          unset GOROOT
+
+          got="$(go version)"
+          echo "$got"
+          test "$got" = "go version go$VERSION linux/amd64"
+
+          go test -short std cmd/...
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="go$VERSION"
+          SHA256="$(cut -d' ' -f1 "dist/$FILE.sha256")"
+          DOWNLOAD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$FILE"
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          TABLE="$(cat "dist/go$VERSION.linux-amd64.xupdate.md")"
+          export VERSION FILE SHA256 DOWNLOAD_URL RUN_URL TABLE
+
+          gh release upload "$TAG" "dist/$FILE" "dist/$FILE.sha256" --clobber
+
+          # 릴리스 노트에서 이전 xupdate 섹션(과 끝의 빈 줄)을 지우고 새 섹션을 붙인다.
+          notes="$RUNNER_TEMP/notes.md"
+          gh release view "$TAG" --json body --jq .body |
+            sed '/^<!-- xupdate -->/,/^<!-- \/xupdate -->/d' |
+            awk '{ l[NR] = $0 } END { n = NR; while (n > 0 && l[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print l[i] }' > "$notes"
+          echo >> "$notes"
+          # shellcheck disable=SC2016 # envsubst 에 치환할 변수 이름을 그대로 넘긴다
+          envsubst '${VERSION} ${FILE} ${SHA256} ${DOWNLOAD_URL} ${RUN_URL} ${TABLE}' \
+            < .github/release-notes-xupdate.md >> "$notes"
+          gh release edit "$TAG" --notes-file "$notes"
+
+      - name: Commit to archives/
+        run: |
+          # Release 와 같은 파일을 저장소에도 둔다. 내용이 같으면(재현 빌드) 커밋하지 않는다.
+          mkdir -p archives
+          cp "dist/$FILE" "dist/$FILE.sha256" archives/
+          git add archives
+          if git diff --cached --quiet; then
+            echo "archives/$FILE is unchanged"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "archives: add $FILE"
+          git push origin "HEAD:$GITHUB_REF_NAME"
