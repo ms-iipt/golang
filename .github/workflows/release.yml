@@ -1,0 +1,81 @@
+name: release
+
+# go.dev 공식 Go 배포본(linux/amd64)을 검증·설치 테스트한 뒤 GitHub Release로 게시한다.
+#   - Actions 탭 > release > Run workflow (버전 입력)
+#   - 또는 태그 푸시: git tag go1.26.8 && git push origin go1.26.8
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Go 버전 (예 1.26.8)
+        required: true
+        default: 1.26.8
+  push:
+    tags:
+      - go*
+
+permissions:
+  contents: write
+
+env:
+  PLATFORM: linux-amd64
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-$GITHUB_REF_NAME}"
+          version="${version#go}"
+          {
+            echo "VERSION=$version"
+            echo "TAG=go$version"
+            echo "FILE=go$version.$PLATFORM.tar.gz"
+          } >> "$GITHUB_ENV"
+
+      - name: Download and verify checksum
+        run: scripts/fetch-go.sh "$VERSION" "$PLATFORM"
+
+      - name: Install and smoke test
+        run: |
+          # README의 설치 절차와 동일하게 설치한다.
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf "dist/$FILE"
+
+          # 러너에 미리 깔린 Go가 아닌 방금 설치한 Go를 쓰도록 한다.
+          export PATH="/usr/local/go/bin:$PATH" GOTOOLCHAIN=local
+          unset GOROOT
+
+          got="$(go version)"
+          echo "$got"
+          test "$got" = "go version go$VERSION linux/amd64"
+
+          cd "$(mktemp -d)"
+          cat > main.go <<'EOF'
+          package main
+
+          import "fmt"
+
+          func main() { fmt.Println("hello, go") }
+          EOF
+          go run main.go
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA256="$(cut -d' ' -f1 "dist/$FILE.sha256")"
+          DOWNLOAD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$FILE"
+          export VERSION FILE SHA256 DOWNLOAD_URL
+          envsubst '${VERSION} ${FILE} ${SHA256} ${DOWNLOAD_URL}' \
+            < .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+
+          gh release create "$TAG" "dist/$FILE" "dist/$FILE.sha256" \
+            --title "Go $VERSION (linux/amd64)" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --target "$GITHUB_SHA"
