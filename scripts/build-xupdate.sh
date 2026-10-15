@@ -103,8 +103,9 @@ xrequires() {
 }
 : > "$work/aux.before"
 : > "$work/aux.after"
+# src 기준 상대 경로로 찾는다 (작업 디렉터리 경로에 "/_" 가 있어도 std/cmd 가 섞이지 않게).
 while IFS= read -r gomod; do
-  dir="$(dirname "$gomod")"
+  dir="$goroot/src/$(dirname "$gomod")"
   before="$(xrequires "$dir")"
   if [[ -z "$before" ]]; then continue; fi
   echo "$before" >> "$work/aux.before"
@@ -113,7 +114,7 @@ while IFS= read -r gomod; do
   go -C "$dir" get "${args[@]}"
   go -C "$dir" mod tidy
   xrequires "$dir" >> "$work/aux.after"
-done < <(find "$goroot/src" -name go.mod -path '*/_*' -not -path '*/testdata/*' | sort)
+done < <(cd "$goroot/src" && find . -name go.mod -path '*/_*' -not -path '*/testdata/*' | sort)
 
 # 3. x/net 에서 생성되는 net/http 번들과 x/sys 로 생성되는 syscall 코드를 다시 만든다.
 #    x/net 의 http2 가 internal/httpsfv 를 쓰면 net/http 에서 import 할 수 있도록
