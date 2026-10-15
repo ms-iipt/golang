@@ -1,15 +1,21 @@
 name: release
 
-# go.dev 공식 Go 배포본(linux/amd64)을 검증·설치 테스트한 뒤 GitHub Release로 게시한다.
-#   - Actions 탭 > release > Run workflow (버전 입력)
-#   - 또는 태그 푸시: git tag go1.26.8 && git push origin go1.26.8
+# go.dev 공식 Go 배포본(linux/amd64)을 버전별로 검증·설치 테스트해 Release(go<버전>)로 게시하고,
+# 이어서 xupdate 워크플로로 golang.org/x 최신화 빌드도 만든다.
+#   - Actions 탭 > release > Run workflow (여러 버전은 공백/쉼표로 구분, 예: 1.26.8 1.27.2)
+#   - 또는 태그 푸시: git tag go1.27.2 && git push origin go1.27.2
+# 이미 있는 버전의 공식 Release 는 건너뛰고, "Latest" 는 가장 높은 버전에만 붙인다.
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Go 버전 (예 1.26.8)
+      versions:
+        description: Go 버전 (여러 개는 공백/쉼표로 구분, 예 1.26.8 1.27.2)
         required: true
-        default: 1.26.8
+        default: 1.27.2
+      xupdate:
+        description: golang.org/x 최신화 빌드(xupdate)도 만든다
+        type: boolean
+        default: true
   push:
     tags:
       - go*
@@ -17,31 +23,49 @@ on:
 permissions:
   contents: write
 
-env:
-  PLATFORM: linux-amd64
-
 jobs:
-  release:
+  versions:
     runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.parse.outputs.list }}
+    steps:
+      - id: parse
+        env:
+          INPUT: ${{ inputs.versions || github.ref_name }}
+        run: |
+          list="$(jq -cn --arg v "$INPUT" '[$v | splits("[\\s,]+") | select(. != "") | ltrimstr("go")]')"
+          echo "$list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.versions.outputs.list) }}
+    env:
+      VERSION: ${{ matrix.version }}
+      TAG: go${{ matrix.version }}
+      FILE: go${{ matrix.version }}.linux-amd64.tar.gz
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Resolve version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
+      - name: Check existing release
+        id: check
         run: |
-          version="${INPUT_VERSION:-$GITHUB_REF_NAME}"
-          version="${version#go}"
-          {
-            echo "VERSION=$version"
-            echo "TAG=go$version"
-            echo "FILE=go$version.$PLATFORM.tar.gz"
-          } >> "$GITHUB_ENV"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::notice::$TAG already exists, skipping"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download and verify checksum
-        run: scripts/fetch-go.sh "$VERSION" "$PLATFORM"
+        if: steps.check.outputs.exists != 'true'
+        run: scripts/fetch-go.sh "$VERSION" linux-amd64
 
       - name: Install and smoke test
+        if: steps.check.outputs.exists != 'true'
         run: |
           # README의 설치 절차와 동일하게 설치한다.
           sudo rm -rf /usr/local/go
@@ -66,8 +90,7 @@ jobs:
           go run main.go
 
       - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: steps.check.outputs.exists != 'true'
         run: |
           SHA256="$(cut -d' ' -f1 "dist/$FILE.sha256")"
           DOWNLOAD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$FILE"
@@ -76,7 +99,21 @@ jobs:
           envsubst '${VERSION} ${FILE} ${SHA256} ${DOWNLOAD_URL}' \
             < .github/release-notes.md > "$RUNNER_TEMP/notes.md"
 
+          # 예전 버전(예: 1.27.x 이후의 1.26.x)을 나중에 올려도 "Latest" 가 옮겨 가지 않게 한다.
+          highest="$({ gh release list --limit 1000 --json tagName --jq '.[].tagName'; echo "$TAG"; } |
+            grep '^go' | sort -V | tail -n 1)"
+          latest=false
+          if [[ $highest == "$TAG" ]]; then latest=true; fi
+
           gh release create "$TAG" "dist/$FILE" "dist/$FILE.sha256" \
             --title "Go $VERSION (linux/amd64)" \
             --notes-file "$RUNNER_TEMP/notes.md" \
-            --target "$GITHUB_SHA"
+            --target "$GITHUB_SHA" \
+            --latest="$latest"
+
+  xupdate:
+    needs: [versions, release]
+    if: github.event_name == 'push' || inputs.xupdate
+    uses: ./.github/workflows/xupdate.yml
+    with:
+      versions: ${{ needs.versions.outputs.list }}

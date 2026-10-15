@@ -7,9 +7,10 @@
 #
 #   scripts/build-xupdate.sh <version> [module...]
 #
-#   version  예: 1.26.8
+#   version  예: 1.27.2
 #   module   기본값: golang.org/x/net golang.org/x/text golang.org/x/sys
 #            std, cmd 각각의 go.mod 에 있는 모듈만 올린다. MVS 에 따라 다른 모듈도 함께 올라갈 수 있다.
+#            코드 생성용 보조 모듈(_asm 등)은 golang.org/x 의존성을 모두 최신으로 올린다.
 #
 # 환경 변수:
 #   GOOS, GOARCH      대상 플랫폼, 기본값 linux/amd64 (호스트와 다르면 교차 빌드)
@@ -58,6 +59,24 @@ export PATH="$goroot/bin:$work/bin:$PATH"
 requires() {
   go -C "$1" mod edit -json | jq -r '.Require[] | "\(.Path) \(.Version)"' | sort
 }
+
+# Go 1.27 의 net/http 테스트는 HTTP/3 테스트용 golang.org/x/net/http3 를 import 하는데, 이 패키지는
+# x/net v0.60.0 에서 삭제되었다 (HTTP/3 는 Go 1.28 에서 std 로 옮겨짐). Go 1.27 은 HTTP/3 테스트 모드를
+# 이미 건너뛰므로(run 의 TODO), import 를 빼고 linkname 으로 받던 등록 함수를 빈 함수로 바꾼다.
+adapt_http3_tests() {
+  local cst="$goroot/src/net/http/clientserver_test.go" xnet
+  grep -q '_ "golang.org/x/net/http3"' "$cst" 2> /dev/null || return 0
+  xnet="$(go -C "$goroot/src" mod download -json golang.org/x/net | jq -r .Dir)"
+  if [[ -d "$xnet/http3" ]]; then return 0; fi
+  perl -0pi -e '
+    s#\n\n\t_ "golang.org/x/net/http3"\n#\n#;
+    s#//go:linkname (registerHTTP3\w+)\nfunc (\1\(\*http\.\w+\) <-chan \*quic\.Endpoint)\n#func $2 { return nil }\n#g;
+  ' "$cst"
+  if grep -q 'golang.org/x/net/http3\|go:linkname registerHTTP3' "$cst"; then
+    echo "error: failed to update $cst" >&2
+    exit 1
+  fi
+}
 for mod in std cmd; do
   dir="$goroot/src"
   if [[ $mod == cmd ]]; then dir="$goroot/src/cmd"; fi
@@ -69,12 +88,32 @@ for mod in std cmd; do
   done
   if [[ ${#args[@]} -gt 0 ]]; then
     go -C "$dir" get "${args[@]}"
+    if [[ $mod == std ]]; then adapt_http3_tests; fi
     go -C "$dir" mod tidy
     go -C "$dir" mod verify
     go -C "$dir" mod vendor
   fi
   requires "$dir" > "$work/$mod.after"
 done
+
+# 코드 생성용 보조 모듈(_asm, _gen 등)은 배포본 빌드에 쓰이지 않지만 go.mod 가 배포본에 들어 있어
+# go.mod 를 읽는 취약점 스캐너가 검사한다. 이 모듈들의 golang.org/x 의존성도 최신으로 올린다.
+xrequires() {
+  go -C "$1" mod edit -json | jq -r '.Require[]? | select(.Path | startswith("golang.org/x/")) | "\(.Path) \(.Version)"'
+}
+: > "$work/aux.before"
+: > "$work/aux.after"
+while IFS= read -r gomod; do
+  dir="$(dirname "$gomod")"
+  before="$(xrequires "$dir")"
+  if [[ -z "$before" ]]; then continue; fi
+  echo "$before" >> "$work/aux.before"
+  args=()
+  while read -r m _; do args+=("$m@latest"); done <<< "$before"
+  go -C "$dir" get "${args[@]}"
+  go -C "$dir" mod tidy
+  xrequires "$dir" >> "$work/aux.after"
+done < <(find "$goroot/src" -name go.mod -path '*/_*' -not -path '*/testdata/*' | sort)
 
 # 3. x/net 에서 생성되는 net/http 번들과 x/sys 로 생성되는 syscall 코드를 다시 만든다.
 #    x/net 의 http2 가 internal/httpsfv 를 쓰면 net/http 에서 import 할 수 있도록
@@ -129,6 +168,12 @@ cp "$goroot/pkg/distpack/go$version.$goos-$goarch.tar.gz" "$out_dir/$name.tar.gz
   for mod in std cmd; do
     join -a 1 -a 2 -e - -o 0,1.2,2.2 "$work/$mod.before" "$work/$mod.after" |
       awk -v mod="$mod" '$2 != $3 { printf "| %s | %s | %s | %s |\n", $1, mod, $2, $3 }'
+  done
+  cut -d' ' -f1 "$work/aux.before" | sort -u | while read -r m; do
+    count="$(awk -v m="$m" '$1 == m' "$work/aux.before" | wc -l | tr -d ' ')"
+    from="$(awk -v m="$m" '$1 == m { print $2 }' "$work/aux.before" | sort -u -t. -k2,2n -k3,3n | paste -sd, - | sed 's/,/, /g')"
+    to="$(awk -v m="$m" '$1 == m { print $2 }' "$work/aux.after" | sort -u | paste -sd, - | sed 's/,/, /g')"
+    echo "| $m | 보조 모듈 ${count}개 | $from | $to |"
   done
 } > "$out_dir/$name.md"
 
