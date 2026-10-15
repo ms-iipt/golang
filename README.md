@@ -70,8 +70,9 @@ release 워크플로가 끝에 자동으로 실행합니다.
 
 알아둘 점:
 
-- Go 모듈 버전 선택(MVS) 때문에 세 모듈 외에도 함께 올라가는 모듈이 있습니다. 예를 들어 x/net은 std의 x/crypto를, x/text는 cmd의 x/tools·x/mod·x/sync를 함께 올립니다. 따라서 `go vet`, `go fix`의 분석기도 새 x/tools 기준이 됩니다.
-  - 예: 새 printf 분석기는 `fmt.Println("foo\n")`을 더 이상 지적하지 않습니다 ([golang/go#80256](https://go.dev/issue/80256)). 그래서 Go 저장소가 x/tools를 올릴 때 한 것과 같이 vet 테스트 기대값(`cmd/vet/testdata/print/print.go`)도 맞춥니다.
+- Go 모듈 버전 선택(MVS) 때문에 세 모듈 외에도 함께 올라가는 모듈이 있습니다. 예를 들어 x/net은 std의 x/crypto를, x/text는 cmd의 x/mod·x/sync를 함께 올립니다.
+- x/text·x/mod는 자기 테스트와 코드 생성기용으로 더 높은 x/tools를 요구하지만(go.mod의 `tagx:ignore`), x/tools는 `go vet`·`go fix`·`go test`가 쓰는 분석기 자체입니다. 그래서 cmd에서는 `replace`로 공식 버전에 고정해, 분석 결과가 공식 배포본과 같게 둡니다. (고정하지 않으면 Go 1.27에서는 vet에 `scannererr`·`sqlrowserr`가 추가되고 printf가 `%d`에 포인터를 넘기는 코드를 새로 잡아, `go test`가 공식과 다르게 실패할 수 있습니다.)
+- 보조 모듈 중 vendor 디렉터리가 있는 것(`cmd/compile/internal/ssa/_gen`)은 생성 결과를 테스트로 검증하므로 그대로 둡니다.
 - 최신 모듈을 이전 Go 버전에 맞추느라 버전별로 조정하는 부분이 있습니다. 스크립트는 해당하는 경우에만 적용하고 결과를 검증합니다.
   - Go 1.26: 최신 x/net의 http2가 `x/net/internal/httpsfv`를 쓰므로 Go 1.27과 같은 방식으로 `net/http/internal/httpsfv`에 번들하고, net/http 번들 설정과 의존성 규칙(`go/build/deps_test.go`)을 맞춥니다.
   - Go 1.26: 최신 모듈들이 `go 1.26.0`을 요구해 `go mod tidy`가 go 줄을 `go 1.26.0`으로 바꾸지만, cmd/dist는 `go 1.26` 형식이어야 빌드하므로 vendoring 후 원래 값으로 되돌립니다. 언어 버전은 둘 다 go1.26입니다.

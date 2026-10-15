@@ -56,8 +56,11 @@ tar -C "$work" -xzf "$work/go$version.src.tar.gz"
 export PATH="$goroot/bin:$work/bin:$PATH"
 
 # 2. std, cmd 모듈의 go.mod 에 있는 대상 모듈을 최신으로 올린다.
+# 실제로 쓰이는 버전을 적는다 (replace 가 있으면 그 버전).
 requires() {
-  go -C "$1" mod edit -json | jq -r '.Require[] | "\(.Path) \(.Version)"' | sort
+  go -C "$1" mod edit -json | jq -r '
+    (reduce (.Replace // [])[] as $r ({}; .[$r.Old.Path] = $r.New.Version)) as $rep
+    | .Require[] | "\(.Path) \($rep[.Path] // .Version)"' | sort
 }
 
 # Go 1.27 의 net/http 테스트는 HTTP/3 테스트용 golang.org/x/net/http3 를 import 하는데, 이 패키지는
@@ -87,9 +90,21 @@ for mod in std cmd; do
     if cut -d' ' -f1 "$work/$mod.before" | grep -qxF "$m"; then args+=("$m@latest"); fi
   done
   if [[ ${#args[@]} -gt 0 ]]; then
+    # x/text, x/mod 는 자기 테스트·생성기용으로만 x/tools 를 요구하는데도(go.mod 의 tagx:ignore) MVS 로
+    # cmd 의 x/tools 를 끌어올린다. x/tools 는 go vet·go fix·go test 가 쓰는 분석기 자체라서 바뀌면
+    # 진단 결과가 달라지므로 (예: Go 1.27 vet 에 scannererr·sqlrowserr 추가, printf 의 %d 포인터 검사),
+    # 공식 버전으로 고정한다. go get 전에 걸어 두어 새 x/tools 의 요구사항도 끌려오지 않게 한다.
+    official_tools="$(awk '$1 == "golang.org/x/tools" { print $2 }' "$work/$mod.before")"
+    if [[ -n $official_tools ]]; then
+      go -C "$dir" mod edit -replace="golang.org/x/tools=golang.org/x/tools@$official_tools"
+    fi
     go -C "$dir" get "${args[@]}"
     if [[ $mod == std ]]; then adapt_http3_tests; fi
     go -C "$dir" mod tidy
+    if [[ -n $official_tools ]] &&
+      [[ "$(go -C "$dir" mod edit -json | jq -r '.Require[] | select(.Path == "golang.org/x/tools") | .Version')" == "$official_tools" ]]; then
+      go -C "$dir" mod edit -dropreplace=golang.org/x/tools
+    fi
     go -C "$dir" mod verify
     go -C "$dir" mod vendor
   fi
@@ -106,6 +121,8 @@ xrequires() {
 # src 기준 상대 경로로 찾는다 (작업 디렉터리 경로에 "/_" 가 있어도 std/cmd 가 섞이지 않게).
 while IFS= read -r gomod; do
   dir="$goroot/src/$(dirname "$gomod")"
+  # vendor 가 있는 모듈(ssa/_gen)은 생성 결과를 테스트(TestGeneratedFilesUpToDate)로 검증하므로 그대로 둔다.
+  if [[ -d "$dir/vendor" ]]; then continue; fi
   before="$(xrequires "$dir")"
   if [[ -z "$before" ]]; then continue; fi
   echo "$before" >> "$work/aux.before"
@@ -135,21 +152,9 @@ if [[ ! -d "$httpsfv" ]] && grep -q '"golang.org/x/net/internal/httpsfv"' "$xnet
     exit 1
   fi
 fi
-tools="$(go -C "$goroot/src/cmd" list -m -f '{{.Version}}' golang.org/x/tools)"
+tools="$(go -C "$goroot/src/cmd" list -m -f '{{with .Replace}}{{.Version}}{{else}}{{.Version}}{{end}}' golang.org/x/tools)"
 GOBIN="$work/bin" go install "golang.org/x/tools/cmd/bundle@$tools"
 (cd "$goroot/src" && go generate -run='^//go:generate bundle ' std && go generate syscall internal/syscall/...)
-
-# x/tools 의 printf 분석기는 2026-07 부터 Println 끝의 개행을 보고하지 않는다 (golang/go#80256).
-# 새 x/tools 를 쓰면 Go 저장소가 x/tools 를 올리며 고친 것과 같이 vet 테스트 기대값을 맞춘다.
-vetprint="$goroot/src/cmd/vet/testdata/print/print.go"
-printf_go="$goroot/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/printf/printf.go"
-if grep -q 'redundant newline' "$vetprint" 2> /dev/null && ! grep -q 'redundant newline' "$printf_go"; then
-  perl -pi -e 's#^(\tfmt\.Println\("foo\\n"\)\s+)// ERROR "Println arg list ends with redundant newline"$#$1// not an error#' "$vetprint"
-  if grep -q 'redundant newline' "$vetprint"; then
-    echo "error: failed to update $vetprint" >&2
-    exit 1
-  fi
-fi
 
 # 의존 모듈이 "go 1.26.0" 을 요구하면 go get 이 go 줄을 1.26 → 1.26.0 으로 올리지만, cmd/dist 는
 # std go.mod 의 go 줄이 "go 1.X" 형식이어야 빌드한다. vendor 와 번들 생성이 끝났으니 원래 값으로 되돌린다.
