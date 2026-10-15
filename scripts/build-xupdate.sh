@@ -101,9 +101,15 @@ for mod in std cmd; do
     go -C "$dir" get "${args[@]}"
     if [[ $mod == std ]]; then adapt_http3_tests; fi
     go -C "$dir" mod tidy
-    if [[ -n $official_tools ]] &&
-      [[ "$(go -C "$dir" mod edit -json | jq -r '.Require[] | select(.Path == "golang.org/x/tools") | .Version')" == "$official_tools" ]]; then
+    if [[ -n $official_tools ]]; then
+      # Go 저장소의 일관성 검사(cmd/internal/moddeps)는 와일드카드 replace 를 별도 요구사항으로 보므로,
+      # 실제로 요구되는 버전에만 replace 를 건다 (요구 버전이 그대로면 replace 가 필요 없다).
+      required_tools="$(go -C "$dir" mod edit -json | jq -r '.Require[] | select(.Path == "golang.org/x/tools") | .Version')"
       go -C "$dir" mod edit -dropreplace=golang.org/x/tools
+      if [[ $required_tools != "$official_tools" ]]; then
+        go -C "$dir" mod edit -replace="golang.org/x/tools@$required_tools=golang.org/x/tools@$official_tools"
+      fi
+      go -C "$dir" mod tidy
     fi
     go -C "$dir" mod verify
     go -C "$dir" mod vendor
