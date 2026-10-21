@@ -9,7 +9,7 @@ go.dev에서 받은 파일을 수정 없이 올리므로 SHA256이 [go.dev/dl](h
 [Releases](https://github.com/ms-iipt/golang/releases)에서 받아 `/usr/local/go`에 풀면 설치가 끝납니다.
 
 ```sh
-VERSION=1.27.2
+VERSION=1.27.3
 FILE=go$VERSION.linux-amd64.tar.gz   # xupdate 빌드는 go$VERSION.linux-amd64.xupdate.tar.gz
 BASE=https://github.com/ms-iipt/golang/releases/download/go$VERSION
 curl -fLO $BASE/$FILE
@@ -18,7 +18,7 @@ sha256sum -c $FILE.sha256
 
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf $FILE
 export PATH=$PATH:/usr/local/go/bin   # 계속 쓰려면 ~/.profile 에 추가
-go version                            # go version go1.27.2 linux/amd64
+go version                            # go version go1.27.3 linux/amd64
 ```
 
 `sudo` 권한이 없으면 `/usr/local` 대신 홈 디렉터리 아래(예: `$HOME/.local`)에 풀고 그 아래 `go/bin`을 PATH에 추가합니다.
@@ -35,13 +35,13 @@ go version                            # go version go1.27.2 linux/amd64
 실행 방법 (여러 버전은 공백이나 쉼표로 구분):
 
 - Actions 탭 → release → Run workflow → 버전 입력 (`xupdate`를 끄면 공식 파일만)
-- `gh workflow run release.yml -f versions="1.26.9 1.27.2"`
-- `git tag go1.27.2 && git push origin go1.27.2` (버전 하나)
+- `gh workflow run release.yml -f versions="1.26.10 1.27.3"`
+- `git tag go1.27.3 && git push origin go1.27.3` (버전 하나)
 
 이미 있는 버전의 공식 Release는 그대로 두고 건너뜁니다.
 "Latest" 표시는 가장 높은 버전에만 붙으므로, 예전 계열(예: 1.26.x)을 나중에 올려도 옮겨 가지 않습니다.
 
-파일만 로컬로 받으려면 `scripts/fetch-go.sh 1.27.2`를 실행합니다. `dist/`에 저장되며 `curl`, `jq`, `sha256sum`이 필요합니다.
+파일만 로컬로 받으려면 `scripts/fetch-go.sh 1.27.3`을 실행합니다. `dist/`에 저장되며 `curl`, `jq`, `sha256sum`이 필요합니다.
 
 ## golang.org/x 최신화 빌드 (xupdate)
 
@@ -52,7 +52,7 @@ Release마다 공식 파일 외에 `go<버전>.linux-amd64.xupdate.tar.gz`도 �
 같은 파일(`.sha256` 포함)이 저장소의 [archives/](archives/)에도 버전별로 있어서, Release 다운로드를 쓸 수 없으면 `git clone`으로 받거나 다음처럼 받을 수 있습니다.
 
 ```sh
-curl -fLO https://github.com/ms-iipt/golang/raw/main/archives/go1.27.2.linux-amd64.xupdate.tar.gz
+curl -fLO https://github.com/ms-iipt/golang/raw/main/archives/go1.27.3.linux-amd64.xupdate.tar.gz
 ```
 
 [xupdate 워크플로](.github/workflows/xupdate.yml)가 [build-xupdate.sh](scripts/build-xupdate.sh)로 Go 저장소의 vendoring 절차(`src/README.vendor`)를 그대로 수행합니다.
@@ -65,8 +65,8 @@ curl -fLO https://github.com/ms-iipt/golang/raw/main/archives/go1.27.2.linux-amd
 6. Release에 파일을 추가하고 릴리스 노트의 버전 표를 갱신, 모든 버전을 모아 `archives/`에 한 번에 커밋 (내용이 같으면 생략)
 
 release 워크플로가 끝에 자동으로 실행합니다.
-이미 있는 Release를 그 시점의 최신 모듈로 다시 만들려면 Actions 탭 → xupdate → Run workflow, 또는 `gh workflow run xupdate.yml -f versions="1.26.9 1.27.2"`로 직접 실행합니다.
-로컬 빌드는 `GOOS=linux GOARCH=amd64 scripts/build-xupdate.sh 1.27.2`입니다 (macOS에서 교차 빌드 가능, `jq`·`perl` 필요).
+이미 있는 Release를 그 시점의 최신 모듈로 다시 만들려면 Actions 탭 → xupdate → Run workflow, 또는 `gh workflow run xupdate.yml -f versions="1.26.10 1.27.3"`로 직접 실행합니다.
+로컬 빌드는 `GOOS=linux GOARCH=amd64 scripts/build-xupdate.sh 1.27.3`입니다 (macOS에서 교차 빌드 가능, `jq`·`perl` 필요).
 
 알아둘 점:
 
